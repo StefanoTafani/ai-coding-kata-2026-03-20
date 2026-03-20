@@ -1,117 +1,124 @@
 package kata;
 
+import java.util.Map;
+
 public class LegacyCheckoutCalculator {
 
+    private static final Map<String, Integer> SHIPPING_BY_COUNTRY = Map.of(
+            "IT", 700,
+            "DE", 900,
+            "US", 1500
+    );
+
+    private static final Map<String, Integer> TAX_BY_COUNTRY = Map.of(
+            "IT", 22,
+            "DE", 19,
+            "US", 7
+    );
+
     public int calculateTotalCents(Order order) {
-        int subtotal = order.subtotalCents();
-        int discountPercent = 0;
-        String customerType = safe(order.customerType());
-        String country = safe(order.country());
-        String coupon = safe(order.couponCode());
+        PricingContext pricing = new PricingContext(
+                normalizeString(order.customerType()),
+                normalizeString(order.country()),
+                normalizeString(order.couponCode()),
+                order.subtotalCents(),
+                order.blackFriday()
+        );
 
-        if (customerType.equals("vip")) {
-            discountPercent = discountPercent + 15;
-        } else if (customerType.equals("premium")) {
-            if (subtotal >= 10000) {
-                discountPercent = discountPercent + 10;
-            } else {
-                discountPercent = discountPercent + 5;
-            }
-        } else if (customerType.equals("employee")) {
-            discountPercent = discountPercent + 30;
-        } else if (customerType.equals("regular") || customerType.equals("new")) {
-            discountPercent = discountPercent + 0;
-        } else {
-            discountPercent = discountPercent + 0;
+        int totalDiscountPercent = customerTypeDiscountPercent(pricing);
+        totalDiscountPercent += couponDiscountPercent(pricing);
+        if (pricing.isBlackFriday()) {
+            totalDiscountPercent += blackFridayDiscountPercent(pricing);
+        }
+        if (totalDiscountPercent > 40) {
+            totalDiscountPercent = 40;
         }
 
-        if (coupon.equals("SAVE10")) {
-            if (subtotal >= 5000) {
-                discountPercent = discountPercent + 10;
-            }
-        } else if (coupon.equals("VIPONLY")) {
-            if (customerType.equals("vip")) {
-                discountPercent = discountPercent + 5;
-            }
-        } else if (coupon.equals("BULK")) {
-            if (subtotal >= 20000) {
-                discountPercent = discountPercent + 7;
-            }
-        }
+        int discountedSubtotalCents = pricing.subtotalCents() * (100 - totalDiscountPercent) / 100;
+        int shippingCents = calculateShippingCents(pricing, discountedSubtotalCents);
+        int taxRatePercent = effectiveTaxRatePercent(pricing);
 
-        if (order.blackFriday()) {
-            if (!customerType.equals("employee")) {
-                discountPercent = discountPercent + 5;
-            }
-        }
+        int taxCents = discountedSubtotalCents * taxRatePercent / 100;
+        int orderTotalCents = discountedSubtotalCents + shippingCents + taxCents;
 
-        if (discountPercent > 40) {
-            discountPercent = 40;
-        }
-
-        int discountedSubtotal = subtotal * (100 - discountPercent) / 100;
-
-        int shippingCents;
-        if (country.equals("IT")) {
-            shippingCents = 700;
-        } else if (country.equals("DE")) {
-            shippingCents = 900;
-        } else if (country.equals("US")) {
-            shippingCents = 1500;
-        } else {
-            shippingCents = 2500;
-        }
-
-        if (order.blackFriday() && country.equals("US")) {
-            shippingCents = shippingCents + 300;
-        }
-
-        if (coupon.equals("FREESHIP") && discountedSubtotal >= 8000) {
-            shippingCents = 0;
-        }
-
-        if (customerType.equals("vip") && discountedSubtotal >= 15000) {
-            shippingCents = 0;
-        }
-
-        if (customerType.equals("premium") && discountedSubtotal >= 20000) {
-            shippingCents = 0;
-        }
-
-        if (customerType.equals("employee") && !country.equals("IT")) {
-            shippingCents = shippingCents + 500;
-        }
-
-        int taxPercent;
-        if (country.equals("IT")) {
-            taxPercent = 22;
-        } else if (country.equals("DE")) {
-            taxPercent = 19;
-        } else if (country.equals("US")) {
-            taxPercent = 7;
-        } else {
-            taxPercent = 0;
-        }
-
-        if (customerType.equals("vip") && country.equals("IT")) {
-            taxPercent = 20;
-        }
-
-        if (coupon.equals("TAXFREE") && !country.equals("IT")) {
-            taxPercent = 0;
-        }
-
-        int taxCents = discountedSubtotal * taxPercent / 100;
-        int total = discountedSubtotal + shippingCents + taxCents;
-
-        if (total < 0) {
+        if (orderTotalCents < 0) {
             return 0;
         }
-
-        return total;
+        return orderTotalCents;
     }
 
-    private String safe(String value) {
+    private int effectiveTaxRatePercent(PricingContext pricing) {
+        int taxRatePercent = TAX_BY_COUNTRY.getOrDefault(pricing.country(), 0);
+
+        if (pricing.customerType().equals("vip") && pricing.country().equals("IT")) {
+            taxRatePercent = 20;
+        }
+
+        if (pricing.coupon().equals("TAXFREE") && !pricing.country().equals("IT")) {
+            taxRatePercent = 0;
+        }
+
+        return taxRatePercent;
+    }
+
+    private int calculateShippingCents(PricingContext pricing, int discountedSubtotalCents) {
+        int shippingCents = SHIPPING_BY_COUNTRY.getOrDefault(pricing.country(), 2500);
+
+        if (pricing.isBlackFriday() && pricing.country().equals("US")) {
+            shippingCents += 300;
+        }
+        if (pricing.coupon().equals("FREESHIP") && discountedSubtotalCents >= 8000) {
+            shippingCents = 0;
+        }
+        if (isEligibleForFreeShipping(pricing.customerType(), discountedSubtotalCents)) {
+            shippingCents = 0;
+        }
+        if (pricing.customerType().equals("employee") && !pricing.country().equals("IT")) {
+            shippingCents += 500;
+        }
+
+        return shippingCents;
+    }
+
+    private boolean isEligibleForFreeShipping(String customerType, int discountedSubtotalCents) {
+        if ((customerType.equals("vip") || customerType.equals("partner")) && discountedSubtotalCents >= 15000) {
+            return true;
+        }
+        return customerType.equals("premium") && discountedSubtotalCents >= 20000;
+    }
+
+    private int blackFridayDiscountPercent(PricingContext pricing) {
+        if (pricing.customerType().equals("partner"))  return 3;
+        if (pricing.customerType().equals("employee")) return 0;
+        return 5;
+    }
+
+    private int couponDiscountPercent(PricingContext pricing) {
+        if (pricing.coupon().equals("SAVE10") && pricing.subtotalCents() >= 5000)                         return 10;
+        if (pricing.coupon().equals("VIPONLY") && pricing.customerType().equals("vip"))                   return 5;
+        if (pricing.coupon().equals("BULK") && pricing.subtotalCents() >= 20000)                          return 7;
+        if (pricing.coupon().equals("PARTNER5") && pricing.customerType().equals("partner")
+                && pricing.subtotalCents() >= 12000)                                                      return 5;
+        return 0;
+    }
+
+    private int customerTypeDiscountPercent(PricingContext pricing) {
+        if (pricing.customerType().equals("vip"))      return 15;
+        if (pricing.customerType().equals("premium"))  return pricing.subtotalCents() >= 10000 ? 10 : 5;
+        if (pricing.customerType().equals("employee")) return 30;
+        if (pricing.customerType().equals("partner"))  return 12;
+        return 0;
+    }
+
+    private String normalizeString(String value) {
         return value == null ? "" : value.trim();
     }
+
+    private record PricingContext(
+            String customerType,
+            String country,
+            String coupon,
+            int subtotalCents,
+            boolean isBlackFriday
+    ) {}
 }
